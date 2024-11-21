@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
@@ -53,32 +56,51 @@ func collectPCInfo() string {
 	// Last Reboot Time with Relative Time
 	lastReboot := formatTime(hostInfo.BootTime)
 	uptime := formatUptime(hostInfo.Uptime)
-	buffer.WriteString(fmt.Sprintf("Last Reboot Time: %s (%s)\n", lastReboot, uptime))
+	buffer.WriteString(fmt.Sprintf("Last Reboot Time: %s %s\n", lastReboot, uptime))
 
 	// Active and Logged-in Users
 	buffer.WriteString("Current Users:\n")
 	buffer.WriteString(collectActiveUsers())
 
 	// CPU Info
-	cpuInfo, _ := cpu.Info()
-	if len(cpuInfo) > 0 {
-		buffer.WriteString(fmt.Sprintf("CPU Model: %s\n", cpuInfo[0].ModelName))
-		buffer.WriteString(fmt.Sprintf("CPU Speed: %.2f GHz\n", cpuInfo[0].Mhz/1000.0))
+	cpuInfo, err := cpu.Info()
+	if err != nil {
+		buffer.WriteString(fmt.Sprintf("Error retrieving CPU information: %v\n", err))
+	} else {
+		for i, info := range cpuInfo {
+			buffer.WriteString(fmt.Sprintf("CPU %d:\n", i+1))
+			buffer.WriteString(fmt.Sprintf("  Model: %s\n", info.ModelName))
+			buffer.WriteString(fmt.Sprintf("  Speed: %.2f GHz\n", info.Mhz/1000.0))
+		}
 	}
 
 	// Memory Info
 	vm, _ := mem.VirtualMemory()
 	buffer.WriteString(fmt.Sprintf("RAM Amount: %.2f GB\n", float64(vm.Total)/(1024*1024*1024)))
-	buffer.WriteString(fmt.Sprintf("RAM Details:\n%s\n", convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getRAMDetails()), 2))))
+	buffer.WriteString(fmt.Sprintf("RAM Details:\n%s", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getRAMDetails()), 2)), "PartNumber", "Part Number", -1)))
 
 	// GPU Info
-	buffer.WriteString(fmt.Sprintf("\nGPU Details:\n%s\n", convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getGPUDetails()), 2))))
+	buffer.WriteString(fmt.Sprintf("\nGPU Details:\n%s\n\n", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getGPUDetails()), 2)), "AdapterRAM", "Adapter RAM", -1)))
+
+	// Hard Drive Info
+	hardDrives, err := getHardDrivesInfo()
+	if err != nil {
+		fmt.Printf("Error retrieving hard drive info: %v\n", err)
+	}
+
+	for _, drive := range hardDrives {
+		buffer.WriteString(fmt.Sprintf("Drive: %s\n", drive.Mapping))
+		buffer.WriteString(fmt.Sprintf("  Model: %s\n", drive.Model))
+		buffer.WriteString(fmt.Sprintf("  Type: %s\n", drive.Type))
+		//buffer.WriteString(fmt.Sprintf("  Form Factor: %s\n", drive.FormFactor))
+		buffer.WriteString(fmt.Sprintf("  Total Size: %.2f GB\n", drive.TotalSize))
+	}
 
 	// Network Info
 	buffer.WriteString(collectNetworkInfo())
 
 	// OS Patches
-	buffer.WriteString(fmt.Sprintf("\nLatest OS Patches:\n%s\n", convertDates(addIndentationSpaces(removeEmptyNewlines(getLastOSPatch()), 2))))
+	buffer.WriteString(fmt.Sprintf("\nLatest OS Patches:\n%s\n", strings.Replace(strings.Replace(convertDates(addIndentationSpaces(removeEmptyNewlines(getLastOSPatch()), 2)), "InstalledOn", "Installed On", -1), "HotFixID ", "HotFix ID", -1)))
 
 	// Top Processes
 	buffer.WriteString("\nTop 10 CPU-Using Processes:\n")
@@ -144,6 +166,12 @@ func convertBytesToMB(input string) string {
 		if err != nil {
 			return match
 		}
+
+		// Skip numbers smaller than 1MB
+		if bytes < 1024*1024 {
+			return match
+		}
+
 		// Convert bytes to MB
 		mb := float64(bytes) / (1024 * 1024)
 		newValue := fmt.Sprintf("%.0f MB", mb)
@@ -213,6 +241,224 @@ func getMacOSDomain() string {
 	return "No domain found or not joined to a domain.\n"
 }
 
+// HardDrive represents the details of a hard drive
+type HardDrive struct {
+	Mapping        string
+	Model          string
+	Type           string
+	FormFactor     string
+	TotalSize      float64
+	AvailableSpace float64
+}
+
+// getHardDrivesInfo retrieves information about all hard drives on the system
+func getHardDrivesInfo() ([]HardDrive, error) {
+	switch runtime.GOOS {
+	case "windows":
+		return getWindowsDrives()
+	case "linux":
+		return getLinuxDrives()
+	case "darwin":
+		return getMacOSDrives()
+	default:
+		return nil, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
+}
+
+func inferDriveType(mediaType, interfaceType string) string {
+	// Normalize input
+	mediaType = strings.ToLower(mediaType)
+	interfaceType = strings.ToLower(interfaceType)
+
+	// Use mediaType and interfaceType to infer drive type
+	if strings.Contains(mediaType, "ssd") || strings.Contains(interfaceType, "nvme") {
+		if strings.Contains(interfaceType, "nvme") {
+			return "NVME (PCI connected)"
+		}
+		return "SSD"
+	} else if strings.Contains(mediaType, "hdd") {
+		return "HDD"
+	} else if strings.Contains(mediaType, "fixed") {
+		caser := cases.Title(language.English)
+		return caser.String(interfaceType + " " + mediaType)
+	} else if strings.Contains(mediaType, "removable") || strings.Contains(interfaceType, "usb") {
+		return "External (USB)"
+	} else {
+		return "Unknown"
+	}
+}
+
+// getWindowsDrives retrieves hard drive info on Windows
+func getWindowsDrives() ([]HardDrive, error) {
+	var drives []HardDrive
+
+	// Use WMIC to fetch drive details
+	out, err := exec.Command("wmic", "diskdrive", "get", "Caption,DeviceID,Size,MediaType,Model,InterfaceType", "/format:csv").Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute wmic diskdrive: %w", err)
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines[2:] { // Skip header
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Split(line, ",")
+		if len(fields) < 6 {
+			continue
+		}
+
+		// Parse WMIC fields
+		mapping := fields[2]            // DeviceID (e.g., \\.\PHYSICALDRIVE0)
+		model := fields[5]              // Model
+		size, _ := parseSize(fields[6]) // Total size in GB
+		mediaType := strings.ToLower(fields[4])
+		interfaceType := strings.ToLower(fields[3])
+
+		// Determine drive type and form factor
+		driveType := inferDriveType(mediaType, interfaceType)
+		formFactor := guessFormFactor(driveType, interfaceType)
+
+		// Append the drive info
+		drives = append(drives, HardDrive{
+			Mapping:    mapping,
+			Model:      model,
+			Type:       driveType,
+			FormFactor: formFactor,
+			TotalSize:  size,
+		})
+	}
+
+	return drives, nil
+}
+
+// getLinuxDrives retrieves hard drive info on Linux
+func getLinuxDrives() ([]HardDrive, error) {
+	var drives []HardDrive
+
+	// Use lsblk to get drive details
+	out, err := exec.Command("lsblk", "-o", "NAME,MODEL,SIZE,TYPE,TRAN").Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute lsblk: %w", err)
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines[1:] { // Skip header line
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+
+		// Parse fields
+		device := fmt.Sprintf("/dev/%s", fields[0]) // Full device path
+		model := fields[1]                          // Drive model
+		size, _ := parseSize(fields[2])             // Size in GB
+		deviceType := fields[3]                     // "disk", "part", etc.
+		interfaceType := fields[4]                  // Transport type: "sata", "nvme", "usb", etc.
+
+		// Determine drive type
+		driveType := inferDriveType(deviceType, interfaceType)
+
+		// Append the drive info
+		drives = append(drives, HardDrive{
+			Mapping:    device,
+			Model:      model,
+			Type:       driveType,
+			FormFactor: guessFormFactor(driveType, interfaceType),
+			TotalSize:  size,
+		})
+	}
+
+	return drives, nil
+}
+
+// getMacOSDrives retrieves hard drive info on macOS
+func getMacOSDrives() ([]HardDrive, error) {
+	var drives []HardDrive
+
+	// Get all drive information using diskutil
+	out, err := exec.Command("diskutil", "list").Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute diskutil: %w", err)
+	}
+	lines := strings.Split(string(out), "\n")
+
+	// Parse each line containing "disk"
+	for _, line := range lines {
+		if strings.Contains(line, "disk") {
+			fields := strings.Fields(line)
+			if len(fields) < 3 {
+				continue
+			}
+
+			// Parse fields
+			mapping := fields[0] // e.g., "disk0", "disk1"
+			model := fields[2]   // Drive description (may include manufacturer or type)
+			size := 0.0          // macOS doesn't directly provide size in `diskutil list`
+
+			// Append the drive info
+			drives = append(drives, HardDrive{
+				Mapping:    mapping,
+				Model:      model,
+				Type:       "Unknown", // macOS doesn't directly provide type
+				FormFactor: "Unknown", // Form factor determination can be added
+				TotalSize:  size,
+			})
+		}
+	}
+
+	return drives, nil
+}
+
+// parseSize converts a size string to GB
+func parseSize(sizeStr string) (float64, error) {
+	size, err := strconv.ParseInt(sizeStr, 10, 64) // Parse size as int64
+	if err != nil || size <= 0 {
+		return 0, fmt.Errorf("invalid size: %s", sizeStr)
+	}
+	return float64(size) / (1024 * 1024 * 1024), nil // Convert to GB
+}
+
+// parseMediaType converts media type descriptions to a more readable format
+func parseMediaType(mediaType string) string {
+	switch strings.ToLower(mediaType) {
+	case "hdd":
+		return "HDD"
+	case "ssd":
+		return "SSD"
+	case "nvme":
+		return "NVME (PCI connected)"
+	default:
+		return "Unknown"
+	}
+}
+
+// guessFormFactor guesses the form factor based on media type and other hints
+func guessFormFactor(driveType, interfaceType string) string {
+	driveType = strings.ToLower(driveType)
+	interfaceType = strings.ToLower(interfaceType)
+
+	// Map type and interface to likely form factors
+	switch {
+	case driveType == "hdd" && (interfaceType == "sata" || strings.Contains(interfaceType, "hard") || interfaceType == "scsi"):
+		return "3.5 or 2.5in Internal HDD"
+	case driveType == "ssd" && interfaceType == "sata":
+		return "2.5in Internal SSD"
+	case strings.Contains(interfaceType, "nvme"):
+		return "m.2"
+	case strings.Contains(interfaceType, "usb"):
+		return "USB External"
+	default:
+		return "Unknown"
+	}
+}
 func getRAMDetails() string {
 	switch runtime.GOOS {
 	case "windows":
@@ -301,7 +547,7 @@ func getLastOSPatch() string {
 }
 
 func getWindowsLastOSPatch() string {
-	out, err := exec.Command("wmic", "qfe", "get", "Description,InstalledOn").Output()
+	out, err := exec.Command("wmic", "qfe", "get", "Description,HotfixID,InstalledOn").Output()
 	if err != nil {
 		return fmt.Sprintf("Error retrieving last OS patch: %v\n", err)
 	}
