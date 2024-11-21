@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -22,7 +23,7 @@ func main() {
 	timestamp := time.Now().Format("2006-01-02--03-04-05.000-PM")
 
 	// File name
-	filename := fmt.Sprintf("pcinfo--%s.txt", timestamp)
+	filename := fmt.Sprintf("wb-pcinfo--%s.txt", timestamp)
 
 	// Collect PC Info
 	pcInfo := collectPCInfo()
@@ -44,6 +45,7 @@ func collectPCInfo() string {
 	hostInfo, _ := host.Info()
 	installDate, relativeTime := getOSInstallDate()
 	buffer.WriteString(fmt.Sprintf("PC Name: %s\n", hostInfo.Hostname))
+	buffer.WriteString(fmt.Sprintf("Domain: %s\n", getComputerDomain()))
 	buffer.WriteString(fmt.Sprintf("OS: %s\n", hostInfo.Platform))
 	buffer.WriteString(fmt.Sprintf("OS Version: %s\n", hostInfo.PlatformVersion))
 	buffer.WriteString(fmt.Sprintf("OS Install Date: %s (%s)\n", installDate, relativeTime))
@@ -67,17 +69,259 @@ func collectPCInfo() string {
 	// Memory Info
 	vm, _ := mem.VirtualMemory()
 	buffer.WriteString(fmt.Sprintf("RAM Amount: %.2f GB\n", float64(vm.Total)/(1024*1024*1024)))
+	buffer.WriteString(fmt.Sprintf("RAM Details:\n%s\n", convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getRAMDetails()), 2))))
+
+	// GPU Info
+	buffer.WriteString(fmt.Sprintf("\nGPU Details:\n%s\n", convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getGPUDetails()), 2))))
 
 	// Network Info
 	buffer.WriteString(collectNetworkInfo())
 
+	// OS Patches
+	buffer.WriteString(fmt.Sprintf("\nLatest OS Patches:\n%s\n", convertDates(addIndentationSpaces(removeEmptyNewlines(getLastOSPatch()), 2))))
+
 	// Top Processes
 	buffer.WriteString("\nTop 10 CPU-Using Processes:\n")
-	buffer.WriteString(getTopProcessesByCPU(10))
+	buffer.WriteString(addIndentationSpaces(getTopProcessesByCPU(10), 2))
 	buffer.WriteString("\nTop 10 RAM-Using Processes:\n")
-	buffer.WriteString(getTopProcessesByRAM(10))
+	buffer.WriteString(addIndentationSpaces(getTopProcessesByRAM(10), 2))
 
 	return buffer.String()
+}
+func addIndentationSpaces(input string, spaces int) string {
+	indent := strings.Repeat(" ", spaces)
+	lines := strings.Split(input, "\n")
+	for i := range lines {
+		lines[i] = indent + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func removeEmptyNewlines(input string) string {
+	var result []string
+	lines := strings.Split(input, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line) // Trim spaces, tabs, and other invisible characters
+		if trimmed != "" {
+			result = append(result, trimmed) // Append trimmed line to result
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+func convertDates(input string) string {
+	re := regexp.MustCompile(`\b(\d{1,2})/(\d{1,2})/(\d{4})\b`)
+	return re.ReplaceAllStringFunc(input, func(match string) string {
+		// Parse the captured groups for month, day, and year
+		matches := re.FindStringSubmatch(match)
+		if len(matches) != 4 {
+			return match // Return the original string if no match
+		}
+
+		// Extract and pad month, day, and year
+		month := fmt.Sprintf("%02d", atoi(matches[1])) // Pad month to 2 digits
+		day := fmt.Sprintf("%02d", atoi(matches[2]))   // Pad day to 2 digits
+		year := matches[3]                             // Year is already 4 digits
+
+		// Return the formatted date
+		return fmt.Sprintf("%s-%s-%s", year, month, day)
+	})
+}
+
+// atoi converts a string to an integer, returning 0 on error
+func atoi(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func convertBytesToMB(input string) string {
+	re := regexp.MustCompile(`\b\d+\b`)
+	result := re.ReplaceAllStringFunc(input, func(match string) string {
+		bytes, err := strconv.ParseInt(match, 10, 64)
+		if err != nil {
+			return match
+		}
+		// Convert bytes to MB
+		mb := float64(bytes) / (1024 * 1024)
+		newValue := fmt.Sprintf("%.0f MB", mb)
+
+		// Calculate the difference in length
+		lengthDiff := len(match) - len(newValue)
+
+		// Add spaces to compensate for the difference
+		if lengthDiff > 0 {
+			newValue += strings.Repeat(" ", lengthDiff)
+		}
+
+		return newValue
+	})
+	return result
+}
+
+func getComputerDomain() string {
+	switch runtime.GOOS {
+	case "windows":
+		return getWindowsDomain()
+	case "linux":
+		return getLinuxDomain()
+	case "darwin":
+		return getMacOSDomain()
+	default:
+		return "Unsupported OS for retrieving domain.\n"
+	}
+}
+
+func getWindowsDomain() string {
+	out, err := exec.Command("wmic", "computersystem", "get", "domain").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving domain: %v\n", err)
+	}
+	lines := strings.Split(string(out), "\n")
+	if len(lines) > 1 {
+		domain := strings.TrimSpace(lines[1])
+		if domain != "" && domain != "Domain" { // Exclude header
+			return domain
+		}
+	}
+	return "No domain found or not joined to a domain.\n"
+}
+
+func getLinuxDomain() string {
+	out, err := exec.Command("hostname", "--domain").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving domain: %v\n", err)
+	}
+	domain := strings.TrimSpace(string(out))
+	if domain != "" {
+		return domain
+	}
+	return "No domain found or not joined to a domain.\n"
+}
+
+func getMacOSDomain() string {
+	out, err := exec.Command("scutil", "--get", "LocalHostName").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving domain: %v\n", err)
+	}
+	domain := strings.TrimSpace(string(out))
+	if domain != "" {
+		return domain
+	}
+	return "No domain found or not joined to a domain.\n"
+}
+
+func getRAMDetails() string {
+	switch runtime.GOOS {
+	case "windows":
+		return getWindowsRAMDetails()
+	case "linux":
+		return getLinuxRAMDetails()
+	case "darwin":
+		return getMacOSRAMDetails()
+	default:
+		return "Unsupported OS for retrieving RAM details.\n"
+	}
+}
+
+func getWindowsRAMDetails() string {
+	out, err := exec.Command("wmic", "memorychip", "get", "Capacity,Manufacturer,PartNumber").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving RAM details: %v\n", err)
+	}
+	return string(out)
+}
+
+func getLinuxRAMDetails() string {
+	out, err := exec.Command("sudo", "dmidecode", "--type", "memory").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving RAM details: %v\n", err)
+	}
+	return string(out)
+}
+
+func getMacOSRAMDetails() string {
+	out, err := exec.Command("system_profiler", "SPMemoryDataType").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving RAM details: %v\n", err)
+	}
+	return string(out)
+}
+
+func getGPUDetails() string {
+	switch runtime.GOOS {
+	case "windows":
+		return getWindowsGPUDetails()
+	case "linux":
+		return getLinuxGPUDetails()
+	case "darwin":
+		return getMacOSGPUDetails()
+	default:
+		return "Unsupported OS for retrieving GPU details.\n"
+	}
+}
+
+func getWindowsGPUDetails() string {
+	out, err := exec.Command("wmic", "path", "win32_VideoController", "get", "Name,AdapterRAM").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving GPU details: %v\n", err)
+	}
+	return string(out)
+}
+
+func getLinuxGPUDetails() string {
+	out, err := exec.Command("lspci", "|", "grep", "-i", "vga").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving GPU details: %v\n", err)
+	}
+	return string(out)
+}
+
+func getMacOSGPUDetails() string {
+	out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving GPU details: %v\n", err)
+	}
+	return string(out)
+}
+
+func getLastOSPatch() string {
+	switch runtime.GOOS {
+	case "windows":
+		return getWindowsLastOSPatch()
+	case "linux":
+		return getLinuxLastOSPatch()
+	case "darwin":
+		return getMacOSLastOSPatch()
+	default:
+		return "Unsupported OS for retrieving last OS patch.\n"
+	}
+}
+
+func getWindowsLastOSPatch() string {
+	out, err := exec.Command("wmic", "qfe", "get", "Description,InstalledOn").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving last OS patch: %v\n", err)
+	}
+	return string(out)
+}
+
+func getLinuxLastOSPatch() string {
+	out, err := exec.Command("tail", "-n", "1", "/var/log/dpkg.log").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving last OS patch: %v\n", err)
+	}
+	return string(out)
+}
+
+func getMacOSLastOSPatch() string {
+	out, err := exec.Command("softwareupdate", "--history").Output()
+	if err != nil {
+		return fmt.Sprintf("Error retrieving last OS patch: %v\n", err)
+	}
+	return string(out)
 }
 
 func getOSInstallDate() (string, string) {
@@ -173,7 +417,7 @@ func collectActiveUsers() string {
 		if username == "" {
 			return "No active users found.\n"
 		}
-		return fmt.Sprintf("- %s (Active)\n", username)
+		return fmt.Sprintf("  - %s (Active)\n", username)
 	case "linux", "darwin":
 		out, err := exec.Command("who").Output()
 		if err != nil {
@@ -194,7 +438,7 @@ func parseUnixUsers(output string) string {
 		}
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
-			result.WriteString(fmt.Sprintf("- %s (TTY: %s)\n", fields[0], fields[1]))
+			result.WriteString(fmt.Sprintf("  - %s (TTY: %s)\n", fields[0], fields[1]))
 		}
 	}
 	return result.String()
