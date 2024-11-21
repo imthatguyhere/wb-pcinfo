@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,7 +37,49 @@ func main() {
 	fmt.Printf("PC info written to %s\n", filename)
 }
 
-// GetOSInstallDate retrieves the OS install date and the relative time since installation.
+func collectPCInfo() string {
+	var buffer strings.Builder
+
+	// Host Info
+	hostInfo, _ := host.Info()
+	installDate, relativeTime := getOSInstallDate()
+	buffer.WriteString(fmt.Sprintf("PC Name: %s\n", hostInfo.Hostname))
+	buffer.WriteString(fmt.Sprintf("OS: %s\n", hostInfo.Platform))
+	buffer.WriteString(fmt.Sprintf("OS Version: %s\n", hostInfo.PlatformVersion))
+	buffer.WriteString(fmt.Sprintf("OS Install Date: %s (%s)\n", installDate, relativeTime))
+
+	// Last Reboot Time with Relative Time
+	lastReboot := formatTime(hostInfo.BootTime)
+	uptime := formatUptime(hostInfo.Uptime)
+	buffer.WriteString(fmt.Sprintf("Last Reboot Time: %s (%s)\n", lastReboot, uptime))
+
+	// Active and Logged-in Users
+	buffer.WriteString("Current Users:\n")
+	buffer.WriteString(collectActiveUsers())
+
+	// CPU Info
+	cpuInfo, _ := cpu.Info()
+	if len(cpuInfo) > 0 {
+		buffer.WriteString(fmt.Sprintf("CPU Model: %s\n", cpuInfo[0].ModelName))
+		buffer.WriteString(fmt.Sprintf("CPU Speed: %.2f GHz\n", cpuInfo[0].Mhz/1000.0))
+	}
+
+	// Memory Info
+	vm, _ := mem.VirtualMemory()
+	buffer.WriteString(fmt.Sprintf("RAM Amount: %.2f GB\n", float64(vm.Total)/(1024*1024*1024)))
+
+	// Network Info
+	buffer.WriteString(collectNetworkInfo())
+
+	// Top Processes
+	buffer.WriteString("\nTop 10 CPU-Using Processes:\n")
+	buffer.WriteString(getTopProcessesByCPU(10))
+	buffer.WriteString("\nTop 10 RAM-Using Processes:\n")
+	buffer.WriteString(getTopProcessesByRAM(10))
+
+	return buffer.String()
+}
+
 func getOSInstallDate() (string, string) {
 	switch runtime.GOOS {
 	case "windows":
@@ -58,14 +99,13 @@ func getWindowsInstallDate() (string, string) {
 		return fmt.Sprintf("Error retrieving install date: %v", err), ""
 	}
 
-	// Parse the output to extract the install date value
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "InstallDate") {
 			fields := strings.Fields(line)
 			if len(fields) >= 3 {
 				// Parse the hexadecimal value in the registry
-				installTimestamp, err := strconv.ParseInt(fields[2], 0, 64) // `0` auto-detects base from "0x" prefix
+				installTimestamp, err := strconv.ParseInt(fields[2], 0, 64) // `0` detects base from "0x" prefix
 				if err != nil {
 					return fmt.Sprintf("Error parsing install date: %v", err), ""
 				}
@@ -121,58 +161,91 @@ func calculateRelativeTime(installDate time.Time) string {
 	return fmt.Sprintf("%d days, %02d hours, %02d minutes ago", days, hours, minutes)
 }
 
+// Collects active and logged-in users based on the OS
+func collectActiveUsers() string {
+	switch runtime.GOOS {
+	case "windows":
+		out, err := exec.Command("powershell", "-Command", "Get-WmiObject -Class Win32_ComputerSystem | Select-Object -ExpandProperty UserName").Output()
+		if err != nil {
+			return fmt.Sprintf("Error fetching users: %v\nEnsure the program is run with administrator privileges.\n", err)
+		}
+		username := strings.TrimSpace(string(out))
+		if username == "" {
+			return "No active users found.\n"
+		}
+		return fmt.Sprintf("- %s (Active)\n", username)
+	case "linux", "darwin":
+		out, err := exec.Command("who").Output()
+		if err != nil {
+			return fmt.Sprintf("Error fetching users: %v\n", err)
+		}
+		return parseUnixUsers(string(out))
+	default:
+		return "Unsupported OS for fetching users.\n"
+	}
+}
+
+func parseUnixUsers(output string) string {
+	var result strings.Builder
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			result.WriteString(fmt.Sprintf("- %s (TTY: %s)\n", fields[0], fields[1]))
+		}
+	}
+	return result.String()
+}
+
+// Collects network-related information
 func collectNetworkInfo() string {
-	var buffer bytes.Buffer
+	var result strings.Builder
 
 	// List all network adapters
 	adapters, err := net.Interfaces()
 	if err != nil {
-		buffer.WriteString(fmt.Sprintf("Error retrieving network adapters: %v\n", err))
-		return buffer.String()
+		return fmt.Sprintf("Error retrieving network adapters: %v\n", err)
 	}
 
-	// Display each adapter and its details
 	for _, adapter := range adapters {
-		buffer.WriteString(fmt.Sprintf("Network Adapter: %s\n", adapter.Name))
+		result.WriteString(fmt.Sprintf("\nNetwork Adapter: %s\n", adapter.Name))
 		if len(adapter.Addrs) > 0 {
-			buffer.WriteString(fmt.Sprintf("  IP Address: %s\n", adapter.Addrs[0].Addr))
+			result.WriteString(fmt.Sprintf("  IP Address: %s\n", adapter.Addrs[0].Addr))
 		}
-		buffer.WriteString(fmt.Sprintf("  MAC Address: %s\n", adapter.HardwareAddr))
-		buffer.WriteString(fmt.Sprintf("  Flags: %v\n", adapter.Flags))
+		result.WriteString(fmt.Sprintf("  MAC Address: %s\n", adapter.HardwareAddr))
 	}
 
 	// Platform-specific logic for additional details
 	switch runtime.GOOS {
 	case "windows":
-		buffer.WriteString(collectWindowsNetworkInfo())
+		result.WriteString(getWindowsNetworkDetails())
 	case "linux":
-		buffer.WriteString(collectLinuxNetworkInfo())
+		result.WriteString(getLinuxNetworkDetails())
 	case "darwin":
-		buffer.WriteString(collectMacOSNetworkInfo())
-	default:
-		buffer.WriteString("Unsupported OS for detailed network info.\n")
+		result.WriteString(getMacOSNetworkDetails())
 	}
 
-	return buffer.String()
+	return result.String()
 }
 
-// Windows-specific network information
-func collectWindowsNetworkInfo() string {
-	var buffer bytes.Buffer
+// Platform-specific network details
+func getWindowsNetworkDetails() string {
+	var result strings.Builder
 
-	// Get the active WiFi SSID
 	out, err := exec.Command("cmd", "/C", "netsh wlan show interfaces").Output()
 	if err == nil {
-		buffer.WriteString(parseWindowsSSID(string(out)))
+		result.WriteString(parseWindowsSSID(string(out)))
 	}
 
-	// Get saved WiFi networks
 	out, err = exec.Command("cmd", "/C", "netsh wlan show profiles").Output()
 	if err == nil {
-		buffer.WriteString(parseWindowsSavedNetworks(string(out)))
+		result.WriteString(parseWindowsSavedNetworks(string(out)))
 	}
 
-	return buffer.String()
+	return result.String()
 }
 
 func parseWindowsSSID(output string) string {
@@ -186,42 +259,41 @@ func parseWindowsSSID(output string) string {
 }
 
 func parseWindowsSavedNetworks(output string) string {
-	var buffer bytes.Buffer
+	var result strings.Builder
+	result.WriteString("Saved WiFi Networks:\n")
 	lines := strings.Split(output, "\n")
-	buffer.WriteString("Saved WiFi Networks:\n")
 	for _, line := range lines {
 		if strings.Contains(line, "All User Profile") {
 			network := strings.TrimSpace(strings.Split(line, ":")[1])
-			buffer.WriteString(fmt.Sprintf("- %s\n", network))
+			result.WriteString(fmt.Sprintf("- %s\n", network))
 		}
 	}
-	return buffer.String()
+	return result.String()
 }
 
-// Linux-specific network information
-func collectLinuxNetworkInfo() string {
-	var buffer bytes.Buffer
+func getLinuxNetworkDetails() string {
+	var result strings.Builder
 
 	// Get the active WiFi SSID
 	out, err := exec.Command("nmcli", "-t", "-f", "active,ssid", "dev", "wifi").Output()
 	if err == nil {
-		buffer.WriteString(parseLinuxSSID(string(out)))
+		result.WriteString(parseLinuxSSID(string(out)))
 	}
 
 	// Get saved WiFi networks
 	out, err = exec.Command("nmcli", "-t", "-f", "ssid", "connection", "show").Output()
 	if err == nil {
-		buffer.WriteString(parseLinuxSavedNetworks(string(out)))
+		result.WriteString(parseLinuxSavedNetworks(string(out)))
 	}
 
-	return buffer.String()
+	return result.String()
 }
 
 func parseLinuxSSID(output string) string {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		fields := strings.Split(line, ":")
-		if len(fields) > 1 && fields[0] == "yes" {
+		if len(fields) > 1 && fields[0] == "yes" { // "yes" indicates an active connection
 			return fmt.Sprintf("Active WiFi Network: %s\n", fields[1])
 		}
 	}
@@ -229,32 +301,30 @@ func parseLinuxSSID(output string) string {
 }
 
 func parseLinuxSavedNetworks(output string) string {
-	var buffer bytes.Buffer
-	buffer.WriteString("Saved WiFi Networks:\n")
+	var result strings.Builder
+	result.WriteString("Saved WiFi Networks:\n")
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		if strings.TrimSpace(line) != "" {
-			buffer.WriteString(fmt.Sprintf("- %s\n", line))
+			result.WriteString(fmt.Sprintf("- %s\n", line))
 		}
 	}
-	return buffer.String()
+	return result.String()
 }
 
-// macOS-specific network information
-func collectMacOSNetworkInfo() string {
-	var buffer bytes.Buffer
+func getMacOSNetworkDetails() string {
+	var result strings.Builder
 
 	// Get the active WiFi SSID
 	out, err := exec.Command("networksetup", "-getairportnetwork", "en0").Output()
 	if err == nil {
-		buffer.WriteString(parseMacOSSSID(string(out)))
+		result.WriteString(parseMacOSSSID(string(out)))
 	}
 
-	// Get saved WiFi networks
-	// This is complex on macOS, as it involves parsing plist files.
-	buffer.WriteString("Saved WiFi Networks: Not implemented on macOS.\n")
+	// Get saved WiFi networks (requires plist parsing, not implemented here)
+	result.WriteString("Saved WiFi Networks: Not implemented on macOS.\n")
 
-	return buffer.String()
+	return result.String()
 }
 
 func parseMacOSSSID(output string) string {
@@ -264,116 +334,10 @@ func parseMacOSSSID(output string) string {
 	return fmt.Sprintf("Active WiFi Network: %s\n", strings.TrimSpace(strings.Split(output, ":")[1]))
 }
 
-func collectPCInfo() string {
-	var buffer bytes.Buffer
-
-	// Host Info
-	hostInfo, _ := host.Info()
-	installDate, relativeTime := getOSInstallDate()
-	buffer.WriteString(fmt.Sprintf("PC Name: %s\n", hostInfo.Hostname))
-	buffer.WriteString(fmt.Sprintf("OS: %s\n", hostInfo.Platform))
-	buffer.WriteString(fmt.Sprintf("OS Version: %s\n", hostInfo.PlatformVersion))
-	buffer.WriteString(fmt.Sprintf("OS Install Date: %s (%s)\n", installDate, relativeTime))
-
-	// Last Reboot Time with Relative Time
-	lastReboot := formatTime(hostInfo.BootTime)
-	uptime := formatUptime(hostInfo.Uptime)
-	buffer.WriteString(fmt.Sprintf("Last Reboot Time: %s (%s ago)\n", lastReboot, uptime))
-
-	// Active and Logged-in Users
-	activeUsers := collectActiveUsers()
-	buffer.WriteString(fmt.Sprintf("Current Users:\n%s\n", activeUsers))
-
-	// CPU Info
-	cpuInfo, _ := cpu.Info()
-	if len(cpuInfo) > 0 {
-		buffer.WriteString(fmt.Sprintf("CPU Model: %s\n", cpuInfo[0].ModelName))
-		buffer.WriteString(fmt.Sprintf("CPU Speed: %.2f GHz\n", cpuInfo[0].Mhz/1000.0))
-	}
-
-	// Memory Info
-	vm, _ := mem.VirtualMemory()
-	buffer.WriteString(fmt.Sprintf("RAM Amount: %.2f GB\n", float64(vm.Total)/(1024*1024*1024)))
-
-	// Network Info
-	collectNetworkInfo()
-
-	// Top Processes
-	topCPUProcesses := getTopProcessesByCPU(10)
-	topRAMProcesses := getTopProcessesByRAM(10)
-	buffer.WriteString("\nTop 10 CPU-Using Processes:\n")
-	buffer.WriteString(topCPUProcesses)
-	buffer.WriteString("\nTop 10 RAM-Using Processes:\n")
-	buffer.WriteString(topRAMProcesses)
-
-	return buffer.String()
-}
-
-func collectActiveUsers() string {
-	var buffer bytes.Buffer
-
-	switch runtime.GOOS {
-	case "windows":
-		// Use PowerShell command as an alternative to `query user`
-		out, err := exec.Command("powershell", "-Command", "Get-WmiObject -Class Win32_ComputerSystem | Select-Object -ExpandProperty UserName").Output()
-		if err != nil {
-			buffer.WriteString(fmt.Sprintf("Error fetching users: %v\n", err))
-			buffer.WriteString("Ensure the program is run with administrator privileges.\n")
-			break
-		}
-		username := strings.TrimSpace(string(out))
-		if username == "" {
-			buffer.WriteString("No active users found.\n")
-		} else {
-			buffer.WriteString(fmt.Sprintf("- %s (Active)\n", username))
-		}
-	case "linux", "darwin":
-		out, err := exec.Command("who").Output()
-		if err != nil {
-			buffer.WriteString(fmt.Sprintf("Error fetching users: %v\n", err))
-			break
-		}
-		buffer.WriteString(parseUnixUsers(string(out)))
-	default:
-		buffer.WriteString("Unsupported OS for fetching users.\n")
-	}
-
-	return buffer.String()
-}
-
-func parseWindowsUsers(output string) string {
-	var buffer bytes.Buffer
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 3 {
-			buffer.WriteString(fmt.Sprintf("- %s (Session: %s, Status: %s)\n", fields[0], fields[1], fields[2]))
-		}
-	}
-	return buffer.String()
-}
-
-func parseUnixUsers(output string) string {
-	var buffer bytes.Buffer
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 1 {
-			buffer.WriteString(fmt.Sprintf("- %s (TTY: %s)\n", fields[0], fields[1]))
-		}
-	}
-	return buffer.String()
-}
-
+// Process-related details
 func getTopProcessesByCPU(limit int) string {
-	var buffer bytes.Buffer
 	procs, _ := process.Processes()
+	var result strings.Builder
 
 	type cpuInfo struct {
 		name     string
@@ -397,15 +361,15 @@ func getTopProcessesByCPU(limit int) string {
 		if i >= limit {
 			break
 		}
-		buffer.WriteString(fmt.Sprintf("%d. %s (%.2f%% CPU) - %s\n", i+1, p.name, p.cpu, p.location))
+		result.WriteString(fmt.Sprintf("%d. %s (%.2f%% CPU) - %s\n", i+1, p.name, p.cpu, p.location))
 	}
 
-	return buffer.String()
+	return result.String()
 }
 
 func getTopProcessesByRAM(limit int) string {
-	var buffer bytes.Buffer
 	procs, _ := process.Processes()
+	var result strings.Builder
 
 	type ramInfo struct {
 		name     string
@@ -429,12 +393,13 @@ func getTopProcessesByRAM(limit int) string {
 		if i >= limit {
 			break
 		}
-		buffer.WriteString(fmt.Sprintf("%d. %s (%.2f%% RAM) - %s\n", i+1, p.name, p.ram, p.location))
+		result.WriteString(fmt.Sprintf("%d. %s (%.2f%% RAM) - %s\n", i+1, p.name, p.ram, p.location))
 	}
 
-	return buffer.String()
+	return result.String()
 }
 
+// Utilities
 func formatTime(epoch uint64) string {
 	t := time.Unix(int64(epoch), 0)
 	return t.Format("2006-01-02 15:04:05")
@@ -442,9 +407,9 @@ func formatTime(epoch uint64) string {
 
 func formatUptime(uptime uint64) string {
 	duration := time.Duration(uptime) * time.Second
-	return fmt.Sprintf("%d days %02d:%02d:%02d",
-		int(duration.Hours())/24,
-		int(duration.Hours())%24,
-		int(duration.Minutes())%60,
-		int(duration.Seconds())%60)
+	days := int(duration.Hours()) / 24
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+
+	return fmt.Sprintf("(%d days, %02d hours, %02d minutes ago)", days, hours, minutes)
 }
