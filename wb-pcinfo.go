@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"regexp"
@@ -63,7 +64,17 @@ func collectPCInfo() string {
 	buffer.WriteString(collectActiveUsers())
 
 	// CPU Info
+	physicalCoreCount, err := cpu.Counts(false)
+	if err != nil {
+		log.Fatalf("Error getting total physical core count: %v", err)
+	}
 	cpuInfo, err := cpu.Info()
+	numCPUs := len(cpuInfo)
+	physicalCoresPerCPU := physicalCoreCount / numCPUs
+
+	buffer.WriteString(fmt.Sprintf("Number of CPUs: %d\n", len(cpuInfo)))
+	buffer.WriteString(fmt.Sprintf("Total CPU Cores: %s\n", getCPUCores()))
+
 	if err != nil {
 		buffer.WriteString(fmt.Sprintf("Error retrieving CPU information: %v\n", err))
 	} else {
@@ -71,6 +82,7 @@ func collectPCInfo() string {
 			buffer.WriteString(fmt.Sprintf("CPU %d:\n", i+1))
 			buffer.WriteString(fmt.Sprintf("  Model: %s\n", info.ModelName))
 			buffer.WriteString(fmt.Sprintf("  Speed: %.2f GHz\n", info.Mhz/1000.0))
+			buffer.WriteString(fmt.Sprintf("  Total CPU Cores: %d Logical Cores (%d Cores and %d Threads [SMT] <Estimated>) \n", info.Cores, physicalCoresPerCPU, (info.Cores - int32(physicalCoresPerCPU))))
 		}
 	}
 
@@ -109,6 +121,24 @@ func collectPCInfo() string {
 	buffer.WriteString(addIndentationSpaces(getTopProcessesByRAM(10), 2))
 
 	return buffer.String()
+}
+
+func getCPUCores() string {
+	// Get logical core count
+	logicalCores, err := cpu.Counts(true)
+	if err != nil {
+		log.Fatalf("Error getting logical core count: %v", err)
+	}
+
+	// Get physical core count
+	physicalCores, err := cpu.Counts(false)
+	if err != nil {
+		log.Fatalf("Error getting physical core count: %v", err)
+	}
+
+	out := fmt.Sprintf("%d Logical Cores (%d Cores and %d Threads [SMT])", logicalCores, physicalCores, (logicalCores - physicalCores))
+
+	return string(out)
 }
 func addIndentationSpaces(input string, spaces int) string {
 	indent := strings.Repeat(" ", spaces)
