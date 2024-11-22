@@ -160,13 +160,13 @@ func collectPCInfo(timestamp string) string {
 	buffer.WriteString(fmt.Sprintf("RAM Amount: %.2f GB\n", float64(vm.Total)/(1024*1024*1024)))
 	buffer.WriteString(fmt.Sprintf("RAM Used: %.2f GB / %.2f GB (%.0f%%)\n", float64(vm.Used)/(1024*1024*1024), float64(vm.Total)/(1024*1024*1024), vm.UsedPercent))
 	buffer.WriteString(fmt.Sprintf("RAM Available: %.2f GB\n", float64(vm.Available)/(1024*1024*1024)))
-	buffer.WriteString(fmt.Sprintf("RAM Details:\n%s", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getRAMDetails()), 2)), "PartNumber", "Part Number", -1)))
+	buffer.WriteString(fmt.Sprintf("RAM Details:\n%s\n", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getRAMDetails()), 2)), "PartNumber", "Part Number", -1)))
 
 	buffer.WriteString("\n----------------------------------\n")
 	buffer.WriteString("| ** Graphics/GPU Information ** |\n")
 	buffer.WriteString("----------------------------------\n")
 	// GPU Info
-	buffer.WriteString(fmt.Sprintf("\nGPU Details:\n%s\n\n", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getGPUDetails()), 2)), "AdapterRAM ", "Adapter RAM", -1)))
+	buffer.WriteString(fmt.Sprintf("GPU Details:\n%s\n", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getGPUDetails()), 2)), "AdapterRAM ", "Adapter RAM", -1)))
 
 	buffer.WriteString("\n-----------------------------------\n")
 	buffer.WriteString("| ** Storage/Drive Information ** |\n")
@@ -187,7 +187,7 @@ func collectPCInfo(timestamp string) string {
 
 	buffer.WriteString("\n-------------------------------------\n")
 	buffer.WriteString("| ** Network/Adapter Information ** |\n")
-	buffer.WriteString("-------------------------------------\n")
+	buffer.WriteString("-------------------------------------")
 	// Network Info
 	buffer.WriteString(collectNetworkInfo())
 
@@ -195,11 +195,11 @@ func collectPCInfo(timestamp string) string {
 	buffer.WriteString("| ** OS Patch Information **|\n")
 	buffer.WriteString("-----------------------------\n")
 	// OS Patches
-	buffer.WriteString(fmt.Sprintf("\nLatest OS Patches:\n%s\n", strings.Replace(strings.Replace(convertDates(addIndentationSpaces(removeEmptyNewlines(getLastOSPatch()), 2)), "InstalledOn", "Installed On", -1), "HotFixID ", "HotFix ID", -1)))
+	buffer.WriteString(fmt.Sprintf("Latest OS Patches:\n%s\n", strings.Replace(strings.Replace(convertDates(addIndentationSpaces(removeEmptyNewlines(getLastOSPatch()), 2)), "InstalledOn", "Installed On", -1), "HotFixID ", "HotFix ID", -1)))
 
 	buffer.WriteString("\n-----------------------------\n")
 	buffer.WriteString("| ** Process Information ** |\n")
-	buffer.WriteString("-----------------------------\n")
+	buffer.WriteString("-----------------------------")
 	// Top Processes
 	buffer.WriteString("\nTop 10 CPU-Using Processes:\n")
 	buffer.WriteString(addIndentationSpaces(getTopProcessesByCPU(10), 2))
