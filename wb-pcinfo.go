@@ -89,6 +89,8 @@ func collectPCInfo() string {
 	// Memory Info
 	vm, _ := mem.VirtualMemory()
 	buffer.WriteString(fmt.Sprintf("RAM Amount: %.2f GB\n", float64(vm.Total)/(1024*1024*1024)))
+	buffer.WriteString(fmt.Sprintf("RAM Used: %.2f GB / %.2f GB (%.0f%%)\n", float64(vm.Used)/(1024*1024*1024), float64(vm.Total)/(1024*1024*1024), vm.UsedPercent))
+	buffer.WriteString(fmt.Sprintf("RAM Available: %.2f GB\n", float64(vm.Available)/(1024*1024*1024)))
 	buffer.WriteString(fmt.Sprintf("RAM Details:\n%s", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getRAMDetails()), 2)), "PartNumber", "Part Number", -1)))
 
 	// GPU Info
