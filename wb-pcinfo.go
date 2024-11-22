@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -24,33 +26,73 @@ import (
 )
 
 func main() {
+
 	// Generate timestamp
 	timestamp := time.Now().Format("2006-01-02--03-04-05.000-PM")
 
 	// File name
 	filename := fmt.Sprintf("wb-pcinfo--%s.txt", timestamp)
 
+	// Redirect stdout to log file and stdout
+	logFile, err2 := redirectStdoutToMulti("wb-pcinfo.log")
+	if err2 != nil {
+		log.Printf("Error redirecting stdout: %v\n", err2)
+		return
+	}
+	defer logFile.Close()
+
 	// Collect PC Info
-	pcInfo := collectPCInfo()
+	pcInfo := collectPCInfo(timestamp)
 
 	// Write to file
 	err := os.WriteFile(filename, []byte(pcInfo), 0644)
 	if err != nil {
-		fmt.Printf("Error writing file: %v\n", err)
+		log.Printf("Error writing file: %v\n", err)
 		return
 	}
 
-	fmt.Printf("PC info written to %s\n", filename)
+	log.Printf("PC info written to %s\n", filename)
+
+	log.Println("")
 }
 
-func collectPCInfo() string {
-	fmt.Println("================================================================")
-	fmt.Println("|  WarpBits PC Info Collector by Imthatguyhere (ITGH | Tyler)  |")
-	fmt.Println("================================================================")
-	fmt.Println("")
-	fmt.Println("Collecting PC info...")
+func redirectStdoutToMulti(logFileName string) (*os.File, error) {
+	// Open or create the log file
+	logFile, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+
+	// Create a multi-writer to write to both stdout and the log file
+	multiWriter := io.MultiWriter(os.Stdout, logFile)
+
+	// Redirect log output to the multi-writer
+	log.SetOutput(multiWriter)
+	log.SetFlags(0)
+
+	return logFile, nil
+}
+
+func collectPCInfo(timestamp string) string {
+	log.Println("================================================================")
+	log.Println("|  WarpBits PC Info Collector by Imthatguyhere (ITGH | Tyler)  |")
+	log.Println("================================================================")
+	log.Println("")
+	log.Printf("Run Time: %s\n", timestamp)
+	log.Println("")
+	log.Println("Collecting PC info...")
 
 	var buffer strings.Builder
+
+	buffer.WriteString("================================================================\n")
+	buffer.WriteString("|  WarpBits PC Info Collector by Imthatguyhere (ITGH | Tyler)  |\n")
+	buffer.WriteString("================================================================\n\n")
+	log.Println("")
+	buffer.WriteString(fmt.Sprintf("Run Time: %s\n", timestamp))
+
+	buffer.WriteString("\n---------------------------\n")
+	buffer.WriteString("| ** Host Information ** |\n")
+	buffer.WriteString("---------------------------\n")
 
 	// Host Info
 	hostInfo, _ := host.Info()
@@ -80,6 +122,9 @@ func collectPCInfo() string {
 	buffer.WriteString(fmt.Sprintf("System Load Average: %.2f (1 min) | %.2f (5 min) | %.2f (15 min)\n", loadAvg.Load1, loadAvg.Load5, loadAvg.Load15))
 	*/
 
+	buffer.WriteString("\n-----------------------------------\n")
+	buffer.WriteString("| ** CPU/Processor Information ** |\n")
+	buffer.WriteString("-----------------------------------\n")
 	// CPU Info
 	physicalCoreCount, err := cpu.Counts(false)
 	if err != nil {
@@ -89,7 +134,7 @@ func collectPCInfo() string {
 	numCPUs := len(cpuInfo)
 	physicalCoresPerCPU := physicalCoreCount / numCPUs
 
-	fmt.Println("Calculating CPU usage for the next 10 seconds...")
+	log.Println("Calculating CPU usage for the next 10 seconds...")
 	cpuPercent, err := cpu.Percent((10 * time.Second), false)
 
 	buffer.WriteString(fmt.Sprintf("CPU Usage: %.0f%% (Time)\n", cpuPercent[0]))
@@ -103,10 +148,13 @@ func collectPCInfo() string {
 			buffer.WriteString(fmt.Sprintf("CPU %d:\n", i+1))
 			buffer.WriteString(fmt.Sprintf("  Model: %s\n", info.ModelName))
 			buffer.WriteString(fmt.Sprintf("  Speed: %.2f GHz\n", info.Mhz/1000.0))
-			buffer.WriteString(fmt.Sprintf("  Total CPU Cores: %d Logical Cores (%d Cores and %d Threads [SMT] <Estimated>) \n", info.Cores, physicalCoresPerCPU, (info.Cores - int32(physicalCoresPerCPU))))
+			buffer.WriteString(fmt.Sprintf("  CPU Cores: %d Logical Cores (%d Cores and %d Threads [SMT] <Estimated>) \n", info.Cores, physicalCoresPerCPU, (info.Cores - int32(physicalCoresPerCPU))))
 		}
 	}
 
+	buffer.WriteString("\n--------------------------------\n")
+	buffer.WriteString("| ** Memory/RAM Information ** |\n")
+	buffer.WriteString("--------------------------------\n")
 	// Memory Info
 	vm, _ := mem.VirtualMemory()
 	buffer.WriteString(fmt.Sprintf("RAM Amount: %.2f GB\n", float64(vm.Total)/(1024*1024*1024)))
@@ -114,13 +162,19 @@ func collectPCInfo() string {
 	buffer.WriteString(fmt.Sprintf("RAM Available: %.2f GB\n", float64(vm.Available)/(1024*1024*1024)))
 	buffer.WriteString(fmt.Sprintf("RAM Details:\n%s", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getRAMDetails()), 2)), "PartNumber", "Part Number", -1)))
 
+	buffer.WriteString("\n----------------------------------\n")
+	buffer.WriteString("| ** Graphics/GPU Information ** |\n")
+	buffer.WriteString("----------------------------------\n")
 	// GPU Info
-	buffer.WriteString(fmt.Sprintf("\nGPU Details:\n%s\n\n", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getGPUDetails()), 2)), "AdapterRAM", "Adapter RAM", -1)))
+	buffer.WriteString(fmt.Sprintf("\nGPU Details:\n%s\n\n", strings.Replace(convertBytesToMB(addIndentationSpaces(removeEmptyNewlines(getGPUDetails()), 2)), "AdapterRAM ", "Adapter RAM", -1)))
 
+	buffer.WriteString("\n-----------------------------------\n")
+	buffer.WriteString("| ** Storage/Drive Information ** |\n")
+	buffer.WriteString("-----------------------------------\n")
 	// Hard Drive Info
 	hardDrives, err := getHardDrivesInfo()
 	if err != nil {
-		fmt.Printf("Error retrieving hard drive info: %v\n", err)
+		log.Printf("Error retrieving hard drive info: %v\n", err)
 	}
 
 	for _, drive := range hardDrives {
@@ -131,20 +185,29 @@ func collectPCInfo() string {
 		buffer.WriteString(fmt.Sprintf("  Total Size: %.2f GB\n", drive.TotalSize))
 	}
 
+	buffer.WriteString("\n-------------------------------------\n")
+	buffer.WriteString("| ** Network/Adapter Information ** |\n")
+	buffer.WriteString("-------------------------------------\n")
 	// Network Info
 	buffer.WriteString(collectNetworkInfo())
 
+	buffer.WriteString("\n-----------------------------\n")
+	buffer.WriteString("| ** OS Patch Information **|\n")
+	buffer.WriteString("-----------------------------\n")
 	// OS Patches
 	buffer.WriteString(fmt.Sprintf("\nLatest OS Patches:\n%s\n", strings.Replace(strings.Replace(convertDates(addIndentationSpaces(removeEmptyNewlines(getLastOSPatch()), 2)), "InstalledOn", "Installed On", -1), "HotFixID ", "HotFix ID", -1)))
 
+	buffer.WriteString("\n-----------------------------\n")
+	buffer.WriteString("| ** Process Information ** |\n")
+	buffer.WriteString("-----------------------------\n")
 	// Top Processes
 	buffer.WriteString("\nTop 10 CPU-Using Processes:\n")
 	buffer.WriteString(addIndentationSpaces(getTopProcessesByCPU(10), 2))
 	buffer.WriteString("\nTop 10 RAM-Using Processes:\n")
 	buffer.WriteString(addIndentationSpaces(getTopProcessesByRAM(10), 2))
 
-	fmt.Println("Collection Completed, outputting now!")
-	fmt.Println("")
+	log.Println("Collection Completed, outputting now!")
+	log.Println("")
 
 	return buffer.String()
 }
@@ -529,11 +592,322 @@ func getRAMDetails() string {
 }
 
 func getWindowsRAMDetails() string {
-	out, err := exec.Command("wmic", "memorychip", "get", "Capacity,Manufacturer,PartNumber").Output()
+	// Get memory chip information
+	memoryChips, err := getMemoryChipInfo()
 	if err != nil {
-		return fmt.Sprintf("Error retrieving RAM details: %v\n", err)
+		log.Printf("Memory Details Error: %v\n", err)
 	}
+
+	out := ""
+
+	// Print memory chip details
+	for i, chip := range memoryChips {
+		out += fmt.Sprintf("RAM Module %d:\n", (i + 1))
+		out += fmt.Sprintf("|- Name/Tag: %s\n", chip.Tag)
+		out += fmt.Sprintf("|- Location: %s\n", chip.DeviceLocator)
+		out += fmt.Sprintf("|- Manufacturer: %s\n", chip.Manufacturer)
+		out += fmt.Sprintf("|- Part Number: %s\n", chip.PartNumber)
+		out += fmt.Sprintf("|- Type: %s\n", chip.MemoryType)
+		out += fmt.Sprintf("|- Form Factor: %s\n", chip.FormFactor)
+		out += fmt.Sprintf("|- Details: %s\n", chip.TypeDetail)
+		out += fmt.Sprintf("|--- Capacity/Size: %s\n", chip.Capacity)
+		out += fmt.Sprintf("|--- Clock Speed: %smhz\n", chip.ConfiguredClockSpeed)
+		out += fmt.Sprintf("|--- Voltage: %s\n", chip.ConfiguredVoltage)
+	}
+
 	return string(out)
+}
+
+type MemoryChip struct {
+	Node                 string
+	Capacity             string
+	ConfiguredClockSpeed string
+	ConfiguredVoltage    string
+	DeviceLocator        string
+	FormFactor           string
+	Manufacturer         string
+	PartNumber           string
+	Tag                  string
+	TypeDetail           string
+	MemoryType           string
+}
+
+func getMemoryChipInfo() ([]MemoryChip, error) {
+	// Execute WMIC command with CSV output
+	cmd := exec.Command("wmic", "memorychip", "get", "Capacity,ConfiguredClockSpeed,ConfiguredVoltage,DeviceLocator,FormFactor,Manufacturer,Tag,PartNumber,TypeDetail,MemoryType,SMBIOSMemoryType", "/format:csv")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute wmic command: %w", err)
+	}
+
+	// Convert output to string and split into lines
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n") // Trim whitespace from entire output
+
+	// Check if the output has enough lines (header + at least one row)
+	if len(lines) < 2 {
+		return nil, fmt.Errorf("unexpected WMIC output format: %s", output)
+	}
+
+	// Use CSV reader to parse the WMIC output
+	reader := csv.NewReader(strings.NewReader(strings.Join(lines[1:], "\n"))) // Skip the first line (metadata line)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse WMIC output as CSV: %w", err)
+	}
+
+	// Extract headers and trim them
+	headers := strings.Split(lines[0], ",") // Use the first line as headers
+	for i := range headers {
+		headers[i] = strings.TrimSpace(headers[i]) // Remove any trailing/leading spaces in headers
+	}
+
+	// Convert records into a slice of MemoryChip structs
+	var results []MemoryChip
+	for _, row := range records {
+		if len(row) == 0 {
+			continue // Skip empty rows
+		}
+		if len(row) != len(headers) {
+			return nil, fmt.Errorf("row/header mismatch: %v headers, %v fields in row", len(headers), len(row))
+		}
+
+		// Create a MemoryChip struct from the row
+		chip := MemoryChip{}
+		for i, value := range row {
+			value = strings.TrimSpace(value) // Trim each value
+			switch headers[i] {
+			case "Node":
+				chip.Node = value
+			case "Capacity":
+				tempCapcity, err := strconv.ParseFloat(value, 64)
+				if err != nil {
+					log.Printf("Capacity Value Error: %v\n", err)
+				}
+				chip.Capacity = fmt.Sprintf("%.2f GB", (tempCapcity / (1024 * 1024 * 1024)))
+
+			case "ConfiguredClockSpeed":
+				chip.ConfiguredClockSpeed = value
+			case "ConfiguredVoltage":
+				tempVoltage, err := strconv.ParseFloat(value, 64)
+				if err != nil {
+					log.Printf("Voltage Value Error: %v\n", err)
+				}
+				chip.ConfiguredVoltage = fmt.Sprintf("%.2fv", (tempVoltage / (1000)))
+			case "DeviceLocator":
+				chip.DeviceLocator = value
+			case "FormFactor":
+				tempFormFactor, err := strconv.Atoi(value)
+				if err != nil {
+					log.Printf("Form Factor Value Error: %v\n", err)
+				}
+				chip.FormFactor = convertWindowsMemoryFormFactor(tempFormFactor)
+			case "Manufacturer":
+				chip.Manufacturer = value
+			case "PartNumber":
+				chip.PartNumber = value
+			case "Tag":
+				chip.Tag = value
+			case "TypeDetail":
+				tempTypeDetail, err := strconv.Atoi(value)
+				if err != nil {
+					log.Printf("Memory Type Value Error: %v\n", err)
+				}
+				chip.TypeDetail = convertWindowsMemoryTypeDetail(tempTypeDetail)
+			case "MemoryType":
+				if value != "0" {
+					tempMemoryType, err := strconv.Atoi(value)
+					if err != nil {
+						log.Printf("Memory Type Value Error: %v\n", err)
+					}
+					chip.MemoryType = getWindowsMemoryTypeString(tempMemoryType)
+				}
+			case "SMBIOSMemoryType":
+				tempMemType, err := strconv.Atoi(value)
+				if err != nil {
+					log.Printf("SMBios Memory Type Value Error: %v\n", err)
+				}
+				tempStringMemType := getWindowsMemoryTypeString(tempMemType)
+
+				if chip.MemoryType == "" {
+					chip.MemoryType = tempStringMemType
+				}
+			}
+		}
+		results = append(results, chip)
+	}
+
+	return results, nil
+}
+
+func getWindowsMemoryTypeString(memoryType int) string {
+	switch memoryType {
+	case 0:
+		return "Unknown"
+	case 1:
+		return "Other"
+	case 2:
+		return "DRAM"
+	case 3:
+		return "Synchronous DRAM"
+	case 4:
+		return "Cache DRAM"
+	case 5:
+		return "EDO"
+	case 6:
+		return "EDRAM"
+	case 7:
+		return "VRAM"
+	case 8:
+		return "SRAM"
+	case 9:
+		return "RAM"
+	case 10:
+		return "ROM"
+	case 11:
+		return "Flash"
+	case 12:
+		return "EEPROM"
+	case 13:
+		return "FEPROM"
+	case 14:
+		return "EPROM"
+	case 15:
+		return "CDRAM"
+	case 16:
+		return "3DRAM"
+	case 17:
+		return "SDRAM"
+	case 18:
+		return "SGRAM"
+	case 19:
+		return "RDRAM"
+	case 20:
+		return "DDR"
+	case 21:
+		return "DDR-2"
+	case 22:
+		return "BRAM"
+	case 23:
+		return "FB-DIMM"
+	case 24:
+		return "DDR3"
+	case 25:
+		return "FBD2"
+	case 26:
+		return "DDR4"
+	case 27:
+		return "LPDDR"
+	case 28:
+		return "LPDDR2"
+	case 29:
+		return "LPDDR3"
+	case 30:
+		return "LPDDR4"
+	case 31:
+		return "Logical non-volatile device"
+	case 32:
+		return "HBM (High Bandwidth Memory)"
+	case 33:
+		return "HBM2 (High Bandwidth Memory Generation 2)"
+	case 34:
+		return "DDR5"
+	case 35:
+		return "LPDDR5"
+	case 36:
+		return "HBM3 (High Bandwidth Memory Generation 3)"
+	default:
+		return fmt.Sprintf("Unknown (%d)", memoryType)
+	}
+}
+
+func convertWindowsMemoryFormFactor(value int) string {
+	switch value {
+	case 0:
+		return "Unknown"
+	case 1:
+		return "Other"
+	case 2:
+		return "SIP"
+	case 3:
+		return "DIP"
+	case 4:
+		return "ZIP"
+	case 5:
+		return "SOJ"
+	case 6:
+		return "Proprietary"
+	case 7:
+		return "SIMM"
+	case 8:
+		return "DIMM"
+	case 9:
+		return "TSOP"
+	case 10:
+		return "PGA"
+	case 11:
+		return "RIMM"
+	case 12:
+		return "SODIMM"
+	case 13:
+		return "SRIMM"
+	case 14:
+		return "SMD"
+	case 15:
+		return "SSMP"
+	case 16:
+		return "QFP"
+	case 17:
+		return "TQFP"
+	case 18:
+		return "SOIC"
+	case 19:
+		return "LCC"
+	case 20:
+		return "PLCC"
+	case 21:
+		return "BGA"
+	case 22:
+		return "FPBGA"
+	case 23:
+		return "LGA"
+	case 24:
+		return "FB-DIMM"
+	default:
+		return fmt.Sprintf("Unknown (%d)", value)
+	}
+}
+
+func convertWindowsMemoryTypeDetail(value int) string {
+	switch value {
+	case 1:
+		return "Reserved"
+	case 2:
+		return "Other"
+	case 4:
+		return "Unknown"
+	case 8:
+		return "Fast-paged"
+	case 16:
+		return "Static column"
+	case 32:
+		return "Pseudo-static"
+	case 64:
+		return "RAMBUS"
+	case 128:
+		return "Synchronous"
+	case 256:
+		return "CMOS"
+	case 512:
+		return "EDO"
+	case 1024:
+		return "Window DRAM"
+	case 2048:
+		return "Cache DRAM"
+	case 4096:
+		return "Non-volatile"
+	default:
+		return fmt.Sprintf("Unknown (%d)", value)
+	}
 }
 
 func getLinuxRAMDetails() string {
