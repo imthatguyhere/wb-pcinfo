@@ -27,6 +27,9 @@ go.work.sum
 # Logs
 *.log
 
+# Winres
+*.syso
+
 #Random
 defs.txt
 wb-pcinfo--2*.txt
