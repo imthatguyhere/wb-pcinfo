@@ -12,7 +12,7 @@
       "0409": {
         "identity": {
           "name": "WarpBits PC Information Collector",
-          "version": "2024.11.22.5976"
+          "version": "2024.11.22.8477"
         },
         "description": "",
         "minimum-os": "vista",
@@ -36,22 +36,22 @@
     "#1": {
       "0000": {
         "fixed": {
-          "file_version": "2024.11.22.138075976",
-          "product_version": "2024.11.22.138075976"
+          "file_version": "2024.11.22.171308477",
+          "product_version": "2024.11.22.171308477"
         },
         "info": {
           "0409": {
             "Comments": "",
             "CompanyName": "WarpBits",
             "FileDescription": "WarpBits PC Information Collector",
-            "FileVersion": "2024.11.22.138075976",
+            "FileVersion": "2024.11.22.171308477",
             "InternalName": "wb-pcinfo",
             "LegalCopyright": "Imthatguyhere (ITGH | Tyler)",
             "LegalTrademarks": "",
             "OriginalFilename": "wb-pcinfo.exe",
             "PrivateBuild": "",
             "ProductName": "WarpBits PC Information Collector",
-            "ProductVersion": "2024.11.22.138075976",
+            "ProductVersion": "2024.11.22.171308477",
             "SpecialBuild": ""
           }
         }
