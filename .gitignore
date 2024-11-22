@@ -23,4 +23,8 @@ go.work.sum
 
 # env file
 .env
+
+
+#Random
 defs.txt
+wb-pcinfo--2*.txt
