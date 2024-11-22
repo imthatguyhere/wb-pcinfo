@@ -16,7 +16,7 @@
         },
         "description": "",
         "minimum-os": "vista",
-        "execution-level": "administrator",
+        "execution-level": "as invoker",
         "ui-access": false,
         "auto-elevate": false,
         "dpi-awareness": "system",
