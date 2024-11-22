@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
+	//"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
@@ -43,6 +44,12 @@ func main() {
 }
 
 func collectPCInfo() string {
+	fmt.Println("================================================================")
+	fmt.Println("|  WarpBits PC Info Collector by Imthatguyhere (ITGH | Tyler)  |")
+	fmt.Println("================================================================")
+	fmt.Println("")
+	fmt.Println("Collecting PC info...")
+
 	var buffer strings.Builder
 
 	// Host Info
@@ -63,6 +70,16 @@ func collectPCInfo() string {
 	buffer.WriteString("Current Users:\n")
 	buffer.WriteString(collectActiveUsers())
 
+	// Get system load averages
+	/* Linux/Unix only, not Windows
+	loadAvg, err := load.Avg()
+	if err != nil {
+		log.Fatalf("Error fetching load averages: %v", err)
+	}
+
+	buffer.WriteString(fmt.Sprintf("System Load Average: %.2f (1 min) | %.2f (5 min) | %.2f (15 min)\n", loadAvg.Load1, loadAvg.Load5, loadAvg.Load15))
+	*/
+
 	// CPU Info
 	physicalCoreCount, err := cpu.Counts(false)
 	if err != nil {
@@ -72,6 +89,10 @@ func collectPCInfo() string {
 	numCPUs := len(cpuInfo)
 	physicalCoresPerCPU := physicalCoreCount / numCPUs
 
+	fmt.Println("Calculating CPU usage for the next 10 seconds...")
+	cpuPercent, err := cpu.Percent((10 * time.Second), false)
+
+	buffer.WriteString(fmt.Sprintf("CPU Usage: %.0f%% (Time)\n", cpuPercent[0]))
 	buffer.WriteString(fmt.Sprintf("Number of CPUs: %d\n", len(cpuInfo)))
 	buffer.WriteString(fmt.Sprintf("Total CPU Cores: %s\n", getCPUCores()))
 
@@ -121,6 +142,9 @@ func collectPCInfo() string {
 	buffer.WriteString(addIndentationSpaces(getTopProcessesByCPU(10), 2))
 	buffer.WriteString("\nTop 10 RAM-Using Processes:\n")
 	buffer.WriteString(addIndentationSpaces(getTopProcessesByRAM(10), 2))
+
+	fmt.Println("Collection Completed, outputting now!")
+	fmt.Println("")
 
 	return buffer.String()
 }
